@@ -8,11 +8,94 @@ from datetime import datetime
 import json
 import math
 import os
+import re
 
 # Configuración del logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 # RUTA DE LA FOTO PERFIL POR DEFECTO
 FOTO_DEFAULT_PATH = r"C:\Users\usuario\OneDrive\Escritorio\ApiConsumo\assets\perfil.png"
+
+#Memoria temporal de correos_corporativos
+contador_correo_ficticio = 1
+correos_vistos_excel = set()
+dnis_vistos_excel = set()
+dni_ficticio_actual = 99999999
+
+def correo_ficticio() -> str:
+    global contador_correo_ficticio
+    backend_correos = obtener_correos_existentes()
+
+    while True:
+        correo = f"ficticio{contador_correo_ficticio}@sanpiox.edu.pe"
+        contador_correo_ficticio += 1
+
+        # Verificar que no se repita en Excel cargado ni en BD
+        if correo not in correos_vistos_excel and correo not in backend_correos:
+            correos_vistos_excel.add(correo)
+            return correo
+        
+def obtener_correos_existentes() -> set:
+    url = "http://192.168.2.142:8080/api/v1/workers"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        correos = {w["correoCorporativo"].strip().lower() for w in data if w.get("correoCorporativo")}
+        return correos
+    except requests.RequestException as e:
+        logging.error(f"❌ Error al obtener correos existentes: {e}")
+        return set()
+
+def obtener_dnis_existentes() -> set:
+    url = "http://192.168.2.142:8080/api/v1/workers"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        dnis = {w["dni"] for w in data if w.get("dni")}
+        return dnis
+    except requests.RequestException as e:
+        logging.error(f"❌ Error al obtener DNIs existentes: {e}")
+        return set()
+
+dnis_existentes_backend = obtener_dnis_existentes()
+
+'''Limpiar el dni considerando: añadir un cero incial si son 7 caracteres, validar que solo sean numeros y 
+    si no lo son eliminar los carteres especiales'''
+def correct_dni(dni: str) -> str:
+    global dni_ficticio_actual
+
+    if pd.isna(dni) or not dni:
+        return generar_dni_ficticio()
+
+    dni_limpio = ''.join(filter(str.isdigit, str(dni).strip()))
+
+    if len(dni_limpio) == 7:
+        dni_limpio = '0' + dni_limpio
+
+    if len(dni_limpio) != 8:
+        return generar_dni_ficticio()
+
+    if dni_limpio in dnis_vistos_excel or dni_limpio in dnis_existentes_backend:
+        return generar_dni_ficticio()
+
+    dnis_vistos_excel.add(dni_limpio)
+    return dni_limpio
+
+def generar_dni_ficticio() -> str:
+    global dni_ficticio_actual
+    
+    while (
+        str(dni_ficticio_actual) in dnis_vistos_excel 
+        or str(dni_ficticio_actual) in dnis_existentes_backend
+    ):
+        dni_ficticio_actual -= 1
+        if dni_ficticio_actual < 90000000:
+            raise ValueError("❌ Se agotaron los DNIs ficticios disponibles")
+        
+    dnis_vistos_excel.add(str(dni_ficticio_actual))
+    
+    return str(dni_ficticio_actual)
 
 def seleccionar_archivo() -> str:
 
@@ -74,6 +157,16 @@ def enviar_post(url: str, payload: dict, foto_file=None, timeout: int = 10) -> r
     except requests.RequestException as e:
         logging.error(f"Error en POST a {url}: {e}")
         raise
+
+def repeated_corporate_mail(val: str) -> bool:
+    if not val:
+        return False
+    val_normalizado = val.strip().lower()
+    if val_normalizado in correos_vistos_excel:
+        return True
+    correos_vistos_excel.add(val_normalizado)
+
+    return False
 
 def crear_payload(fila: pd.Series) -> dict:
     def safe_str(val, max_len=None):
@@ -189,14 +282,27 @@ def crear_payload(fila: pd.Series) -> dict:
             return None
         
     def validar_correo_corporativo(val: str) -> str:
-        if pd.isna(val):
+        if repeated_corporate_mail(val):
+            return correo_ficticio()
+        else:
+            if pd.isna(val) or val == "":
+                return correo_ficticio()
+
+            return val
+
+    def validar_dni(dni: str) -> str:
+        if pd.isna(dni):
             return None
-        return val.strip().lower() if isinstance(val, str) else None
+        
+        clean_dni = str(dni).strip().lower()
+        valid_dni = correct_dni(clean_dni)
+
+        return valid_dni
         
     payload = {
         "nombres": safe_str(fila.get("nombres"), 40),
         "apellidos": safe_str(fila.get("apellidos"), 40),
-        "dni": safe_str(fila.get("dni"), 8),
+        "dni": validar_dni(fila.get("dni")),
         "sexo": validar_sexo(fila.get("sexo")),
         "area": safe_str_required(fila.get("area"), min_len=2, max_len=30),
         "status": safe_str(fila.get("status"), 1) or "v", #v=celda vacía
