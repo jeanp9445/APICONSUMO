@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+from requests_toolbelt.multipart.encoder import MultipartEncoder
 
 # Configuración del logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
@@ -136,27 +137,16 @@ def dic_a_multipart(dic: dict) -> dict:
     para que requests envíe multipart/form-data.
     """
     return {k: (None, str(v)) for k, v in dic.items()}
-    
-def enviar_post(url: str, payload: dict, foto_file=None, timeout: int = 10) -> requests.Response:
-    """
-    Envía un POST con el payload JSON a la URL indicada.
-    :param url: endpoint al que hacer POST
-    :param payload: diccionario con los datos a enviar
-    :param timeout: segundos antes de timeout
-    :return: objeto Response de requests
-    """
 
-    try:
-        files = dic_a_multipart(payload)
-        if foto_file:
-            files["foto"] = foto_file  # Añadir la foto si se proporciona
-
-        resp = requests.post(url, files=files, timeout=timeout)
-        resp.raise_for_status() # Lanza un error si la respuesta no es 200
-        return resp
-    except requests.RequestException as e:
-        logging.error(f"Error en POST a {url}: {e}")
-        raise
+def enviar_put(url: str, payload: dict, timeout: int = 10) -> requests.Response:
+    """
+    Envía un PUT con payload en formato JSON (application/json).
+    Sólo campos que quieras actualizar.
+    """
+    headers = {'Content-Type': 'application/json'}
+    resp = requests.put(url, json=payload, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+    return resp
 
 def repeated_corporate_mail(val: str) -> bool:
     if not val:
@@ -167,6 +157,23 @@ def repeated_corporate_mail(val: str) -> bool:
     correos_vistos_excel.add(val_normalizado)
 
     return False
+
+def obtener_id_por_dni(dni: str) -> int | None:
+    """
+    Consulta al backend por el trabajador con ese DNI y retorna su ID si existe.
+    """
+    url = "http://192.168.2.142:8080/api/v1/workers"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        trabajadores = resp.json()
+        for t in trabajadores:
+            if t.get("dni") == dni:
+                return t.get("id")
+        return None
+    except requests.RequestException as e:
+        logging.error(f"❌ Error al obtener ID por DNI: {e}")
+        return None
 
 def crear_payload(fila: pd.Series) -> dict:
     def safe_str(val, max_len=None):
@@ -300,22 +307,15 @@ def crear_payload(fila: pd.Series) -> dict:
         return valid_dni
         
     payload = {
-        "nombres": safe_str(fila.get("nombres"), 40),
-        "apellidos": safe_str(fila.get("apellidos"), 40),
-        "dni": validar_dni(fila.get("dni")),
         "sexo": validar_sexo(fila.get("sexo")),
         "area": safe_str_required(fila.get("area"), min_len=2, max_len=30),
         "status": safe_str(fila.get("status"), 1) or "v", #v=celda vacía
         "referencia": safe_str(fila.get("referencia"), 100) or "SIN REFERENCIA",
         "estadoCivil": validar_estado_civil(safe_str(fila.get("estadoCivil"), 20)),
-        "fechaNacimiento": safe_date(fila.get("fechaNacimiento")),
         "cargo": safe_str(fila.get("cargo"), 80),
         "tipoTrabajador": validar_tipo_trabajador(safe_str(fila.get("tipoTrabajador"), 30)),
-        "direccion": safe_str(fila.get("direccion"), 200),
         "distrito": safe_str(fila.get("distrito"), 30),
-        "celular": safe_str(fila.get("celular"), 9),
         "correoCorporativo": validar_correo_corporativo(safe_str(fila.get("correoCorporativo"), 70)),
-        "correoPersonal": safe_str(fila.get("correoPersonal"), 100),
         "fechaInicioContrato": safe_date(fila.get("fechaInicioContrato")),
         "fechaInicioLaboral": safe_date(fila.get("fechaInicioLaboral")),
         "fechaFinContrato": safe_date(fila.get("fechaFinContrato")),
@@ -332,6 +332,15 @@ def crear_payload(fila: pd.Series) -> dict:
 
     return payload, foto_file
 
+def strict_dni(dni: str) -> str | None:
+    if pd.isna(dni) or not str(dni).strip().isdigit():
+        return None
+    dni_str = str(dni).strip()
+    if len(dni_str) == 7:
+        dni_str = '0' + dni_str
+    return dni_str if len(dni_str) == 8 else None
+
+
 def main():
     # --- Configuración fija ---
     ENDPOINT = "http://192.168.2.142:8080/api/v1/users" # Ajusta la URL de tu API
@@ -346,12 +355,25 @@ def main():
     for id, fila in df.iterrows():
 
         try:
+            dni_raw = fila.get("dni")
+            dni = strict_dni(dni_raw)
+            if not dni:
+                logging.warning(f"[Fila {id}] DNI no disponible. Se omite.")
+                continue
+
+            worker_id = obtener_id_por_dni(dni)
+            if worker_id is None:
+                logging.warning(f"Fila {id} No se encontró ID para el DNI {dni}. Se omite.")
+                continue
+
             payload, foto_file = crear_payload(fila)
             if payload is None:
                 continue
 
-            logging.info(f"Enviado trabajador: {payload['nombres']} {payload['apellidos']}")
-            resp = enviar_post(ENDPOINT, payload, foto_file=foto_file)
+            payload["id"] = worker_id
+            endpoint = f"{ENDPOINT}/{worker_id}"
+            logging.info(f"Actualizando ID={worker_id}")
+            resp = enviar_put(endpoint, payload)
             logging.info(f"✔️ {resp.status_code} - {resp.text}")
 
         except requests.exceptions.HTTPError as e:

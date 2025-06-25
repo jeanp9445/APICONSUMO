@@ -9,11 +9,10 @@ import json
 import math
 import os
 import re
+from requests_toolbelt.multipart.encoder import MultipartEncoder
 
 # Configuración del logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
-# RUTA DE LA FOTO PERFIL POR DEFECTO
-FOTO_DEFAULT_PATH = r"C:\Users\usuario\OneDrive\Escritorio\ApiConsumo\assets\perfil.png"
 
 #Memoria temporal de correos_corporativos
 contador_correo_ficticio = 1
@@ -130,32 +129,19 @@ def cargar_excel(ruta_excel: str, hoja: str = None) -> pd.DataFrame:
         logging.error(f"Error al leer el archivo Excel: {e}")
         sys.exit(1)
 
-def dic_a_multipart(dic: dict) -> dict:
+def enviar_post(url: str, payload: dict, timeout: int = 10) -> requests.Response:
     """
-    Convierte {'campo':'valor'} -> {'campo': (None, 'valor')}
-    para que requests envíe multipart/form-data.
+    Envía un POST con el payload en formato JSON (application/json).
     """
-    return {k: (None, str(v)) for k, v in dic.items()}
-    
-def enviar_post(url: str, payload: dict, foto_file=None, timeout: int = 10) -> requests.Response:
-    """
-    Envía un POST con el payload JSON a la URL indicada.
-    :param url: endpoint al que hacer POST
-    :param payload: diccionario con los datos a enviar
-    :param timeout: segundos antes de timeout
-    :return: objeto Response de requests
-    """
-
     try:
-        files = dic_a_multipart(payload)
-        if foto_file:
-            files["foto"] = foto_file  # Añadir la foto si se proporciona
-
-        resp = requests.post(url, files=files, timeout=timeout)
-        resp.raise_for_status() # Lanza un error si la respuesta no es 200
+        headers = {'Content-Type': 'application/json'}
+        resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        resp.raise_for_status()
         return resp
     except requests.RequestException as e:
         logging.error(f"Error en POST a {url}: {e}")
+        raise
+
         raise
 
 def repeated_corporate_mail(val: str) -> bool:
@@ -269,17 +255,6 @@ def crear_payload(fila: pd.Series) -> dict:
                 return "Ejecutivo"
             case _:
                 return "Empleado"  # Valor por defecto si no es válido
-
-    def cargar_foto(path: str):
-        if not path or pd.isna(path):
-            path = os.path.join(os.getcwd(), "assets/perfil.png")
-        try:
-            with open(path, 'rb') as f:
-                filename = os.path.basename(path)
-                return (filename, f.read(), "image/png")
-        except Exception as e:
-            logging.warning(f"[Foto inválida] No se pudo abrir la foto '{path}': {e}")
-            return None
         
     def validar_correo_corporativo(val: str) -> str:
         if repeated_corporate_mail(val):
@@ -298,39 +273,28 @@ def crear_payload(fila: pd.Series) -> dict:
         valid_dni = correct_dni(clean_dni)
 
         return valid_dni
-        
+
     payload = {
         "nombres": safe_str(fila.get("nombres"), 40),
         "apellidos": safe_str(fila.get("apellidos"), 40),
         "dni": validar_dni(fila.get("dni")),
         "sexo": validar_sexo(fila.get("sexo")),
-        "area": safe_str_required(fila.get("area"), min_len=2, max_len=30),
-        "status": safe_str(fila.get("status"), 1) or "v", #v=celda vacía
-        "referencia": safe_str(fila.get("referencia"), 100) or "SIN REFERENCIA",
-        "estadoCivil": validar_estado_civil(safe_str(fila.get("estadoCivil"), 20)),
         "fechaNacimiento": safe_date(fila.get("fechaNacimiento")),
-        "cargo": safe_str(fila.get("cargo"), 80),
-        "tipoTrabajador": validar_tipo_trabajador(safe_str(fila.get("tipoTrabajador"), 30)),
         "direccion": safe_str(fila.get("direccion"), 200),
-        "distrito": safe_str(fila.get("distrito"), 30),
-        "celular": safe_str(fila.get("celular"), 9),
-        "correoCorporativo": validar_correo_corporativo(safe_str(fila.get("correoCorporativo"), 70)),
-        "correoPersonal": safe_str(fila.get("correoPersonal"), 100),
-        "fechaInicioContrato": safe_date(fila.get("fechaInicioContrato")),
-        "fechaInicioLaboral": safe_date(fila.get("fechaInicioLaboral")),
-        "fechaFinContrato": safe_date(fila.get("fechaFinContrato")),
-        "fechaInicioPerComputable": safe_date(fila.get("fechaInicioPerComputable")),
-        "sueldo": validar_campo_sueldo(fila.get("sueldo")),
-        "movilidad": safe_float(fila.get("movilidad")),
-        "asignacionFamiliar": safe_bool(fila.get("asignacionFamiliar")),
-        "urlDireccion": safe_str(fila.get("urlDireccion"), 255) or "https://longitudlargadecaracteres.com",
-        "numeroHijos": safe_int(fila.get("numeroHijos")),
+        "telefono": safe_str(fila.get("celular"), 9),
+        "correo": safe_str(fila.get("correoPersonal"),30),
     }
 
-    foto_path = fila.get("foto")
-    foto_file = cargar_foto(foto_path)
+    dni_final = payload["dni"] if payload["dni"] else "00000000"
+    ultimos_4 = dni_final[-4:] if len(dni_final) >= 4 else "0000"
+    primer_nombre = payload["nombres"].split()[0].lower() if payload["nombres"] else "usuario"
 
-    return payload, foto_file
+    payload["username"] = f"{primer_nombre}.{ultimos_4}"
+    payload["password"] = f"SanPioX{ultimos_4}"
+    payload["roles"] = []
+    payload["sedes"] = []
+
+    return payload
 
 def main():
     # --- Configuración fija ---
@@ -346,12 +310,12 @@ def main():
     for id, fila in df.iterrows():
 
         try:
-            payload, foto_file = crear_payload(fila)
+            payload = crear_payload(fila)
             if payload is None:
                 continue
 
             logging.info(f"Enviado trabajador: {payload['nombres']} {payload['apellidos']}")
-            resp = enviar_post(ENDPOINT, payload, foto_file=foto_file)
+            resp = enviar_post(ENDPOINT, payload)
             logging.info(f"✔️ {resp.status_code} - {resp.text}")
 
         except requests.exceptions.HTTPError as e:
