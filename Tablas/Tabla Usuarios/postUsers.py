@@ -34,7 +34,7 @@ def correo_ficticio() -> str:
             return correo
         
 def obtener_correos_existentes() -> set:
-    url = "http://192.168.2.142:8080/api/v1/users"
+    url = "http://192.168.100.5:8080/api/v1/users"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -46,7 +46,7 @@ def obtener_correos_existentes() -> set:
         return set()
 
 def obtener_dnis_existentes() -> set:
-    url = "http://192.168.2.142:8080/api/v1/users"
+    url = "http://192.168.100.5:8080/api/v1/users"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -298,7 +298,7 @@ def crear_payload(fila: pd.Series) -> dict:
 
 def main():
     # --- Configuración fija ---
-    ENDPOINT = "http://192.168.2.142:8080/api/v1/users" # Ajusta la URL de tu API
+    ENDPOINT = "http://192.168.100.5:8080/api/v1/users" # Ajusta la URL de tu API
 
     # 1) Seleccionar archivo Excel mediante diálogo
     ruta_excel = seleccionar_archivo()

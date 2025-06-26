@@ -14,7 +14,7 @@ from requests_toolbelt.multipart.encoder import MultipartEncoder
 # Configuración del logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 # RUTA DE LA FOTO PERFIL POR DEFECTO
-FOTO_DEFAULT_PATH = r"C:\Users\usuario\OneDrive\Escritorio\ApiConsumo\assets\perfil.png"
+FOTO_DEFAULT_PATH = r"C:\Users\jeanm\Downloads\apiconsumo25062025\assets\perfil.png"
 
 #Memoria temporal de correos_corporativos
 contador_correo_ficticio = 1
@@ -36,7 +36,7 @@ def correo_ficticio() -> str:
             return correo
         
 def obtener_correos_existentes() -> set:
-    url = "http://192.168.2.142:8080/api/v1/users"
+    url = "http://192.168.100.5:8080/api/v1/workers"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -48,7 +48,7 @@ def obtener_correos_existentes() -> set:
         return set()
 
 def obtener_dnis_existentes() -> set:
-    url = "http://192.168.2.142:8080/api/v1/users"
+    url = "http://192.168.100.5:8080/api/v1/workers"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -63,11 +63,9 @@ dnis_existentes_backend = obtener_dnis_existentes()
 
 '''Limpiar el dni considerando: añadir un cero incial si son 7 caracteres, validar que solo sean numeros y 
     si no lo son eliminar los carteres especiales'''
-def correct_dni(dni: str) -> str:
-    global dni_ficticio_actual
-
+def correct_dni(dni: str) -> str | None:
     if pd.isna(dni) or not dni:
-        return generar_dni_ficticio()
+        return None
 
     dni_limpio = ''.join(filter(str.isdigit, str(dni).strip()))
 
@@ -75,28 +73,13 @@ def correct_dni(dni: str) -> str:
         dni_limpio = '0' + dni_limpio
 
     if len(dni_limpio) != 8:
-        return generar_dni_ficticio()
+        return None
 
     if dni_limpio in dnis_vistos_excel or dni_limpio in dnis_existentes_backend:
-        return generar_dni_ficticio()
+        return dni_limpio
 
     dnis_vistos_excel.add(dni_limpio)
     return dni_limpio
-
-def generar_dni_ficticio() -> str:
-    global dni_ficticio_actual
-    
-    while (
-        str(dni_ficticio_actual) in dnis_vistos_excel 
-        or str(dni_ficticio_actual) in dnis_existentes_backend
-    ):
-        dni_ficticio_actual -= 1
-        if dni_ficticio_actual < 90000000:
-            raise ValueError("❌ Se agotaron los DNIs ficticios disponibles")
-        
-    dnis_vistos_excel.add(str(dni_ficticio_actual))
-    
-    return str(dni_ficticio_actual)
 
 def seleccionar_archivo() -> str:
 
@@ -138,13 +121,24 @@ def dic_a_multipart(dic: dict) -> dict:
     """
     return {k: (None, str(v)) for k, v in dic.items()}
 
-def enviar_put(url: str, payload: dict, timeout: int = 10) -> requests.Response:
+def enviar_put(url: str, payload: dict, foto_file, timeout: int = 10) -> requests.Response:
     """
-    Envía un PUT con payload en formato JSON (application/json).
-    Sólo campos que quieras actualizar.
+    Envía un PUT con payload y foto usando multipart/form-data.
+    payload se debe serializar como JSON y enviarse bajo el campo 'worker'.
     """
-    headers = {'Content-Type': 'application/json'}
-    resp = requests.put(url, json=payload, headers=headers, timeout=timeout)
+    fields = {
+        "worker": ("worker.json", json.dumps(payload), "application/json")
+    }
+
+    if foto_file:
+        filename, content, mime_type = foto_file
+        fields["foto"] = (filename, content, mime_type)
+
+    m = MultipartEncoder(fields=fields)
+
+    headers = {'Content-Type': m.content_type}
+
+    resp = requests.put(url, data=m, headers=headers, timeout=timeout)
     resp.raise_for_status()
     return resp
 
@@ -162,7 +156,7 @@ def obtener_id_por_dni(dni: str) -> int | None:
     """
     Consulta al backend por el trabajador con ese DNI y retorna su ID si existe.
     """
-    url = "http://192.168.2.142:8080/api/v1/workers"
+    url = "http://192.168.100.5:8080/api/v1/workers"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -278,15 +272,18 @@ def crear_payload(fila: pd.Series) -> dict:
                 return "Empleado"  # Valor por defecto si no es válido
 
     def cargar_foto(path: str):
-        if not path or pd.isna(path):
-            path = os.path.join(os.getcwd(), "assets/perfil.png")
+        if not path or pd.isna(path) or not os.path.exists(path):
+            path = FOTO_DEFAULT_PATH
+
         try:
             with open(path, 'rb') as f:
                 filename = os.path.basename(path)
                 return (filename, f.read(), "image/png")
         except Exception as e:
             logging.warning(f"[Foto inválida] No se pudo abrir la foto '{path}': {e}")
-            return None
+            # Devolver un archivo vacío para cumplir con el requerimiento del backend
+            return ("vacio.png", b"", "image/png")
+
         
     def validar_correo_corporativo(val: str) -> str:
         if repeated_corporate_mail(val):
@@ -305,8 +302,22 @@ def crear_payload(fila: pd.Series) -> dict:
         valid_dni = correct_dni(clean_dni)
 
         return valid_dni
+    
+    def campo_opcional(val):
+        if pd.isna(val) or str(val).strip() == "":
+            return None
+        return str(val).strip()
+
         
     payload = {
+        "nombres": safe_str_required(fila.get("nombres"), min_len=2, max_len=100),
+        "apellidos": safe_str_required(fila.get("apellidos"), min_len=2, max_len=100),
+        "dni": validar_dni(fila.get("dni")),
+        "fechaNacimiento": safe_date(fila.get("fechaNacimiento"), default="1990-01-01"),
+        "correo": safe_str(fila.get("correo"), 70) or "correo@ficticio.com",
+        "direccion": safe_str(fila.get("direccion"), 100) or "No especificada",
+        "telefono": safe_str(fila.get("telefono"), 15) or "000000000",
+
         "sexo": validar_sexo(fila.get("sexo")),
         "area": safe_str_required(fila.get("area"), min_len=2, max_len=30),
         "status": safe_str(fila.get("status"), 1) or "v", #v=celda vacía
@@ -325,10 +336,25 @@ def crear_payload(fila: pd.Series) -> dict:
         "asignacionFamiliar": safe_bool(fila.get("asignacionFamiliar")),
         "urlDireccion": safe_str(fila.get("urlDireccion"), 255) or "https://longitudlargadecaracteres.com",
         "numeroHijos": safe_int(fila.get("numeroHijos")),
+
+        "correoPersonal": campo_opcional(fila.get("correoPersonal")),
+        "celular": campo_opcional(fila.get("celular")),
+        "vacation": None,
+        "sedes": [],
+        "horarios": []
     }
 
     foto_path = fila.get("foto")
     foto_file = cargar_foto(foto_path)
+
+    # Añadir campo requerido 'vacation' con valores por defecto
+    payload["vacation"] = {
+        "id": 0,  # Valor genérico para evitar errores si se espera un ID
+        "fechaInicio": "2025-01-01",  # Fecha ficticia válida
+        "fechaFin": "2025-01-15",     # Fecha ficticia válida
+        "estado": True,               # Valor booleano requerido
+        "workerId": 0                 # Este se sobreescribirá luego con el ID real
+    }
 
     return payload, foto_file
 
@@ -343,7 +369,7 @@ def strict_dni(dni: str) -> str | None:
 
 def main():
     # --- Configuración fija ---
-    ENDPOINT = "http://192.168.2.142:8080/api/v1/users" # Ajusta la URL de tu API
+    ENDPOINT = "http://192.168.100.5:8080/api/v1/workers" # Ajusta la URL de tu API
 
     # 1) Seleccionar archivo Excel mediante diálogo
     ruta_excel = seleccionar_archivo()
@@ -371,9 +397,13 @@ def main():
                 continue
 
             payload["id"] = worker_id
+
+            if "vacation" in payload:
+                payload["vacation"]["workerId"] = worker_id
+
             endpoint = f"{ENDPOINT}/{worker_id}"
             logging.info(f"Actualizando ID={worker_id}")
-            resp = enviar_put(endpoint, payload)
+            resp = enviar_put(endpoint, payload, foto_file)
             logging.info(f"✔️ {resp.status_code} - {resp.text}")
 
         except requests.exceptions.HTTPError as e:
