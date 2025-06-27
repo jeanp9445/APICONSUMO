@@ -34,7 +34,7 @@ def correo_ficticio() -> str:
             return correo
         
 def obtener_correos_existentes() -> set:
-    url = "http://192.168.100.5:8080/api/v1/users"
+    url = "http://192.168.2.142:8080/api/v1/users" # "http://spx-enterprise.com.pe/api/api/v1/users" "http://192.168.2.142:8080/api/v1/users"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -46,7 +46,7 @@ def obtener_correos_existentes() -> set:
         return set()
 
 def obtener_dnis_existentes() -> set:
-    url = "http://192.168.100.5:8080/api/v1/users"
+    url = "http://192.168.2.142:8080/api/v1/users" # "http://spx-enterprise.com.pe/api/api/v1/users" "http://192.168.2.142:8080/api/v1/users"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -273,6 +273,44 @@ def crear_payload(fila: pd.Series) -> dict:
         valid_dni = correct_dni(clean_dni)
 
         return valid_dni
+    
+    def validar_correo_personal(val: str) -> str:
+        correo_regex = r"^[^@]+@[^@]+\.[^@]+$"
+        
+        if pd.isna(val):
+            correo = f"{correo_ficticio().split('@')[0]}@gmail.com"
+        else:
+            val = str(val).strip()
+            if re.match(correo_regex, val) and 5 <= len(val) <= 30:
+                correo = val
+            else:
+                correo = f"{correo_ficticio().split('@')[0]}@gmail.com"
+
+        # Cortar a 30 si se pasa
+        if len(correo) > 30:
+            nombre, dominio = correo.split('@')
+            nombre_corto = nombre[:30 - len(dominio) - 1]
+            correo = f"{nombre_corto}@{dominio}"
+
+        return correo
+    
+    def correct_dni(dni: str) -> str | None:
+        if pd.isna(dni) or not dni:
+            return None
+
+        dni_limpio = ''.join(filter(str.isdigit, str(dni).strip()))
+
+        if len(dni_limpio) == 7:
+            dni_limpio = '0' + dni_limpio
+
+        if len(dni_limpio) != 8:
+            return None
+
+        if dni_limpio in dnis_vistos_excel or dni_limpio in dnis_existentes_backend:
+            return dni_limpio
+
+        dnis_vistos_excel.add(dni_limpio)
+        return dni_limpio
 
     payload = {
         "nombres": safe_str(fila.get("nombres"), 40),
@@ -282,15 +320,16 @@ def crear_payload(fila: pd.Series) -> dict:
         "fechaNacimiento": safe_date(fila.get("fechaNacimiento")),
         "direccion": safe_str(fila.get("direccion"), 200),
         "telefono": safe_str(fila.get("celular"), 9),
-        "correo": safe_str(fila.get("correoPersonal"),30),
+        "correo": safe_str(fila.get("correoPersonal"),30)
     }
+
 
     dni_final = payload["dni"] if payload["dni"] else "00000000"
     ultimos_4 = dni_final[-4:] if len(dni_final) >= 4 else "0000"
     primer_nombre = payload["nombres"].split()[0].lower() if payload["nombres"] else "usuario"
 
-    payload["username"] = f"{primer_nombre}.{ultimos_4}"
-    payload["password"] = f"SanPioX{ultimos_4}"
+    payload["username"] = correct_dni(fila.get("dni"))
+    payload["password"] = correct_dni(fila.get("dni"))
     payload["roles"] = []
     payload["sedes"] = []
 
@@ -298,7 +337,7 @@ def crear_payload(fila: pd.Series) -> dict:
 
 def main():
     # --- Configuración fija ---
-    ENDPOINT = "http://192.168.100.5:8080/api/v1/users" # Ajusta la URL de tu API
+    ENDPOINT = "http://192.168.2.142:8080/api/v1/users" # "http://spx-enterprise.com.pe/api/api/v1/users" "http://192.168.2.142:8080/api/v1/users"
 
     # 1) Seleccionar archivo Excel mediante diálogo
     ruta_excel = seleccionar_archivo()

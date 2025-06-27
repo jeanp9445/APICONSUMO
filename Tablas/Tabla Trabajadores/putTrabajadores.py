@@ -36,7 +36,7 @@ def correo_ficticio() -> str:
             return correo
         
 def obtener_correos_existentes() -> set:
-    url = "http://192.168.100.5:8080/api/v1/workers"
+    url = "http://192.168.2.142:8080/api/v1/workers" # "http://spx-enterprise.com.pe/api/api/v1/workers" "http://192.168.2.142:8080/api/v1/workers"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -48,7 +48,7 @@ def obtener_correos_existentes() -> set:
         return set()
 
 def obtener_dnis_existentes() -> set:
-    url = "http://192.168.100.5:8080/api/v1/workers"
+    url = "http://192.168.2.142:8080/api/v1/workers" # "http://spx-enterprise.com.pe/api/api/v1/workers" "http://192.168.2.142:8080/api/v1/workers"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -156,7 +156,7 @@ def obtener_id_por_dni(dni: str) -> int | None:
     """
     Consulta al backend por el trabajador con ese DNI y retorna su ID si existe.
     """
-    url = "http://192.168.100.5:8080/api/v1/workers"
+    url = "http://192.168.2.142:8080/api/v1/workers" # "http://spx-enterprise.com.pe/api/api/v1/workers" "http://192.168.2.142:8080/api/v1/workers"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -369,7 +369,7 @@ def strict_dni(dni: str) -> str | None:
 
 def main():
     # --- Configuración fija ---
-    ENDPOINT = "http://192.168.100.5:8080/api/v1/workers" # Ajusta la URL de tu API
+    ENDPOINT = "http://192.168.2.142:8080/api/v1/workers" # "http://spx-enterprise.com.pe/api/api/v1/workers" "http://192.168.2.142:8080/api/v1/workers"
 
     # 1) Seleccionar archivo Excel mediante diálogo
     ruta_excel = seleccionar_archivo()
